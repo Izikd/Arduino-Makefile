@@ -377,31 +377,31 @@ endif
 # Arduino and system paths
 
 ifndef CC_NAME
-CC_NAME      = avr-gcc
+CC_NAME      = zzavr-gcc
 endif
 
 ifndef CXX_NAME
-CXX_NAME     = avr-g++
+CXX_NAME     = zzavr-g++
 endif
 
 ifndef OBJCOPY_NAME
-OBJCOPY_NAME = avr-objcopy
+OBJCOPY_NAME = zzavr-objcopy
 endif
 
 ifndef OBJDUMP_NAME
-OBJDUMP_NAME = avr-objdump
+OBJDUMP_NAME = zzavr-objdump
 endif
 
 ifndef AR_NAME
-AR_NAME      = avr-ar
+AR_NAME      = zzavr-ar
 endif
 
 ifndef SIZE_NAME
-SIZE_NAME    = avr-size
+SIZE_NAME    = zzavr-size
 endif
 
 ifndef NM_NAME
-NM_NAME      = avr-nm
+NM_NAME      = zzavr-nm
 endif
 
 ifndef AVR_TOOLS_DIR
@@ -728,6 +728,62 @@ else
     $(call show_config_variable,ARDUINO_CORE_PATH,[USER])
 endif
 
+
+########################################################################
+# Platfrom file
+
+PLATFORM_TXT = platform_$(BOARD_TAG).txt
+
+PLATFORM_FILE := $(shell $(ARDMK_DIR)/bin/platform.py \
+							--arduino-dir $(ARDUINO_DIR) \
+							--arduino-ver $(ARDUINO_VERSION) \
+							--vendor $(ARDMK_VENDOR) \
+							--arch $(ARCHITECTURE) \
+							--board-tag $(BOARD_TAG) \
+							--build-path $(OBJDIR) \
+							--project-name $(TARGET) \
+							--output-file $(PLATFORM_TXT))
+
+ifndef PARSE_PLATFORM
+    # result = $(call READ_BOARD_TXT, 'boardname', 'parameter')
+    PARSE_PLATFORM = $(shell grep -v '^\#' $(PLATFORM_TXT) | grep "^[ \t]*$(1)=" | cut -d = -f 2-)
+endif
+
+
+RECIPE_C_PATTERN       = $(call PARSE_PLATFORM,recipe.c.o.pattern)
+RECIPE_CPP_PATTERN     = $(call PARSE_PLATFORM,recipe.cpp.o.pattern)
+RECIPE_S_PATTERN       = $(call PARSE_PLATFORM,recipe.S.o.pattern)
+RECIPE_AR_PATTERN      = $(call PARSE_PLATFORM,recipe.ar.pattern)
+RECIPE_COMBINE_PATTERN = $(call PARSE_PLATFORM,recipe.c.combine.pattern)
+
+RECIPE_SIZE_PATTERN    = $(call PARSE_PLATFORM,recipe.size.pattern)
+RECIPE_SIZE_REGEX      = $(call PARSE_PLATFORM,recipe.size.regex)
+
+UPLOAD_TOOL            = $(call PARSE_BOARD,$(BOARD_TAG),upload.tool)
+RECIPE_SIZE_REGEX      = $(call PARSE_PLATFORM,recipe.size.regex)
+
+# usage: $(call COMPUTE_OBJ_RECIPE, $(RECIPE_*_PATTERN), 'source file', 'obj file')
+COMPUTE_OBJ_RECIPE = $(subst {object_file},$(3),$(subst {source_file},$(2),$(subst {includes},$(INCLUDES) $(USER_CPPFLAGS),$(1))))
+
+# usage: $(call COMPUTE_AR_RECIPE, 'build path', 'obj file')
+COMPUTE_AR_RECIPE = $(subst {archive_file},$(3),$(subst {object_file},$(2),$(subst {build.path},$(1),$(RECIPE_AR_PATTERN))))
+
+# usage: $(call COMPUTE_COMBINE_RECIPE, 'build path', 'obj files', 'archive file')
+COMPUTE_COMBINE_RECIPE = $(subst {archive_file},$(3),$(subst {object_files},$(2),$(subst {build.path},$(1),$(RECIPE_COMBINE_PATTERN))))
+
+# usage: $(call COMPUTE_OBJCPY_EXT_RECIPE, 'hex/epp')
+COMPUTE_OBJCPY_EXT_RECIPE = $(call PARSE_PLATFORM,recipe.objcopy.$(1).pattern)
+
+# usage: $(call COMPUTE_SIZE_RECIPE)
+CHECK_SIZE = $(if $(shell $(RECIPE_SIZE_PATTERN) | grep -E "$(RECIPE_SIZE_REGEX)"),1,0)
+
+
+
+define \n
+
+
+endef
+
 ########################################################################
 # Reset
 
@@ -885,7 +941,7 @@ endif
 TARGET_HEX = $(OBJDIR)/$(TARGET).hex
 TARGET_ELF = $(OBJDIR)/$(TARGET).elf
 TARGET_EEP = $(OBJDIR)/$(TARGET).eep
-CORE_LIB   = $(OBJDIR)/libcore.a
+CORE_LIB   = $(OBJDIR)/core.a
 
 # Names of executables - chipKIT needs to override all to set paths to PIC32
 # tools, and we can't use "?=" assignment because these are already implicitly
@@ -1008,10 +1064,12 @@ else
     $(call show_config_variable,MCU_FLAG_NAME,[USER])
 endif
 
+INCLUDES = -I$(ARDUINO_CORE_PATH) -I$(ARDUINO_VAR_PATH)/$(VARIANT) \
+        $(SYS_INCLUDES) $(PLATFORM_INCLUDES) $(USER_INCLUDES)
+
 # Using += instead of =, so that CPPFLAGS can be set per sketch level
 CPPFLAGS      += -$(MCU_FLAG_NAME)=$(MCU) -DF_CPU=$(F_CPU) -DARDUINO=$(ARDUINO_VERSION) $(ARDUINO_ARCH_FLAG) -D__PROG_TYPES_COMPAT__ \
-        -I$(ARDUINO_CORE_PATH) -I$(ARDUINO_VAR_PATH)/$(VARIANT) \
-        $(SYS_INCLUDES) $(PLATFORM_INCLUDES) $(USER_INCLUDES) -Wall -ffunction-sections \
+        $(INCLUDES) -Wall -ffunction-sections \
         -fdata-sections
 
 ifdef DEBUG
@@ -1096,16 +1154,16 @@ endif
 get_isp_port = $(if $(wildcard $(ISP_PORT)),$(firstword $(wildcard $(ISP_PORT))),$(if $(findstring Xusb,X$(ISP_PORT)),$(ISP_PORT),$(error ISP port $(ISP_PORT) not found!)))
 
 # Command for avr_size: do $(call avr_size,elffile,hexfile)
-ifneq (,$(findstring AVR,$(shell $(SIZE) --help)))
-    # We have a patched version of binutils that mentions AVR - pass the MCU
-    # and the elf to get nice output.
-    avr_size = $(SIZE) $(SIZEFLAGS) --format=avr $(1)
-    $(call show_config_info,Size utility: AVR-aware for enhanced output,[AUTODETECTED])
-else
-    # We have a plain-old binutils version - just give it the hex.
-    avr_size = $(SIZE) $(2)
-    $(call show_config_info,Size utility: Basic (not AVR-aware),[AUTODETECTED])
-endif
+#ifneq (,$(findstring AVR,$(shell $(SIZE) --help)))
+#    # We have a patched version of binutils that mentions AVR - pass the MCU
+#    # and the elf to get nice output.
+#    avr_size = $(SIZE) $(SIZEFLAGS) --format=avr $(1)
+#    $(call show_config_info,Size utility: AVR-aware for enhanced output,[AUTODETECTED])
+#else
+#    # We have a plain-old binutils version - just give it the hex.
+#    avr_size = $(SIZE) $(2)
+#    $(call show_config_info,Size utility: Basic (not AVR-aware),[AUTODETECTED])
+#endif
 
 ifneq (,$(strip $(ARDUINO_LIBS)))
     $(call arduino_output,-)
@@ -1137,8 +1195,8 @@ endif
 ARDMK_VERSION = 1.5
 $(call show_config_variable,ARDMK_VERSION,[COMPUTED])
 
-CC_VERSION := $(shell $(CC) -dumpversion)
-$(call show_config_variable,CC_VERSION,[COMPUTED],($(CC_NAME)))
+#CC_VERSION := $(shell $(CC) -dumpversion)
+#$(call show_config_variable,CC_VERSION,[COMPUTED],($(CC_NAME)))
 
 # end of config output
 $(call show_separator)
@@ -1153,38 +1211,47 @@ $(call show_separator)
 
 # library sources
 $(OBJDIR)/libs/%.c.o: $(ARDUINO_LIB_PATH)/%.c
+	@$(ECHO) "=== C $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CC) -MMD -c $(CPPFLAGS) $(CFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_C_PATTERN),$<,$@)
 
 $(OBJDIR)/libs/%.cpp.o: $(ARDUINO_LIB_PATH)/%.cpp
+	@$(ECHO) "=== CPP $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CXX) -MMD -c $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_CPP_PATTERN),$<,$@)
 
 $(OBJDIR)/libs/%.S.o: $(ARDUINO_LIB_PATH)/%.S
+	@$(ECHO) "=== S $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CC) -MMD -c $(CPPFLAGS) $(ASFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_S_PATTERN),$<,$@)
 
 $(OBJDIR)/platformlibs/%.c.o: $(ARDUINO_PLATFORM_LIB_PATH)/%.c
+	@$(ECHO) "=== C $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CC) -MMD -c $(CPPFLAGS) $(CFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_C_PATTERN),$<,$@)
 
 $(OBJDIR)/platformlibs/%.cpp.o: $(ARDUINO_PLATFORM_LIB_PATH)/%.cpp
+	@$(ECHO) "=== CPP $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CXX) -MMD -c $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_CPP_PATTERN),$<,$@)
 
 $(OBJDIR)/platformlibs/%.S.o: $(ARDUINO_PLATFORM_LIB_PATH)/%.S
+	@$(ECHO) "=== S $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CC) -MMD -c $(CPPFLAGS) $(ASFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_S_PATTERN),$<,$@)
 
 $(OBJDIR)/userlibs/%.cpp.o: $(USER_LIB_PATH)/%.cpp
+	@$(ECHO) "=== CPP $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CXX) -MMD -c $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_CPP_PATTERN),$<,$@)
 
 $(OBJDIR)/userlibs/%.c.o: $(USER_LIB_PATH)/%.c
+	@$(ECHO) "=== C $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CC) -MMD -c $(CPPFLAGS) $(CFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_C_PATTERN),$<,$@)
 
 $(OBJDIR)/userlibs/%.S.o: $(USER_LIB_PATH)/%.S
+	@$(ECHO) "=== S $@\n"
 	@$(MKDIR) $(dir $@)
 	$(CC) -MMD -c $(CPPFLAGS) $(ASFLAGS) $< -o $@
 
@@ -1196,24 +1263,29 @@ endif
 
 # normal local sources
 $(OBJDIR)/%.c.o: %.c $(COMMON_DEPS) | $(OBJDIR)
+	@$(ECHO) "=== C $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CC) -MMD -c $(CPPFLAGS) $(CFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_C_PATTERN),$<,$@)
 
 $(OBJDIR)/%.cc.o: %.cc $(COMMON_DEPS) | $(OBJDIR)
+	@$(ECHO) "=== CC $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CXX) -MMD -c $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_CPP_PATTERN),$<,$@)
 
 $(OBJDIR)/%.cpp.o: %.cpp $(COMMON_DEPS) | $(OBJDIR)
+	@$(ECHO) "=== CPP $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CXX) -MMD -c $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_CPP_PATTERN),$<,$@)
 
 $(OBJDIR)/%.S.o: %.S $(COMMON_DEPS) | $(OBJDIR)
+	@$(ECHO) "=== S $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CC) -MMD -c $(CPPFLAGS) $(ASFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_S_PATTERN),$<,$@)
 
 $(OBJDIR)/%.s.o: %.s $(COMMON_DEPS) | $(OBJDIR)
+	@$(ECHO) "=== s $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CC) -c $(CPPFLAGS) $(ASFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_S_PATTERN),$<,$@)
 
 # the pde -> o file
 $(OBJDIR)/%.pde.o: %.pde $(COMMON_DEPS) | $(OBJDIR)
@@ -1240,34 +1312,38 @@ $(OBJDIR)/%.s: %.cpp $(COMMON_DEPS) | $(OBJDIR)
 
 # core files
 $(OBJDIR)/core/%.c.o: $(ARDUINO_CORE_PATH)/%.c $(COMMON_DEPS) | $(OBJDIR)
+	@$(ECHO) "=== C $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CC) -MMD -c $(CPPFLAGS) $(CFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_C_PATTERN),$<,$@)
 
 $(OBJDIR)/core/%.cpp.o: $(ARDUINO_CORE_PATH)/%.cpp $(COMMON_DEPS) | $(OBJDIR)
+	@$(ECHO) "=== CPP $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CXX) -MMD -c $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_CPP_PATTERN),$<,$@)
 
 $(OBJDIR)/core/%.S.o: $(ARDUINO_CORE_PATH)/%.S $(COMMON_DEPS) | $(OBJDIR)
+	@$(ECHO) "=== S $@\n"
 	@$(MKDIR) $(dir $@)
-	$(CC) -MMD -c $(CPPFLAGS) $(ASFLAGS) $< -o $@
+	$(call COMPUTE_OBJ_RECIPE,$(RECIPE_S_PATTERN),$<,$@)
 
 # various object conversions
 $(OBJDIR)/%.hex: $(OBJDIR)/%.elf $(COMMON_DEPS)
+	@$(ECHO) "=== HEX $@\n"
 	@$(MKDIR) $(dir $@)
-	$(OBJCOPY) -O ihex -R .eeprom $< $@
+	$(call COMPUTE_OBJCPY_EXT_RECIPE,hex)
 	@$(ECHO) '\n'
-	$(call avr_size,$<,$@)
+	$(RECIPE_SIZE_PATTERN)
 ifneq ($(strip $(HEX_MAXIMUM_SIZE)),)
-	@if [ `$(SIZE) $@ | awk 'FNR == 2 {print $$2}'` -le $(HEX_MAXIMUM_SIZE) ]; then touch $@.sizeok; fi
+	@if [ $(call CHECK_SIZE) ]; then touch $@.sizeok; fi
 else
 	@$(ECHO) "Maximum flash memory of $(BOARD_TAG) is not specified. Make sure the size of $@ is less than $(BOARD_TAG)\'s flash memory"
 	@touch $@.sizeok
 endif
 
 $(OBJDIR)/%.eep: $(OBJDIR)/%.elf $(COMMON_DEPS)
+	@$(ECHO) "=== EEP $@\n"
 	@$(MKDIR) $(dir $@)
-	-$(OBJCOPY) -j .eeprom --set-section-flags=.eeprom='alloc,load' \
-		--change-section-lma .eeprom=0 -O ihex $< $@
+	$(call COMPUTE_OBJCPY_EXT_RECIPE,eep)
 
 $(OBJDIR)/%.lss: $(OBJDIR)/%.elf $(COMMON_DEPS)
 	@$(MKDIR) $(dir $@)
@@ -1415,10 +1491,12 @@ pre-build:
 		$(call runscript_if_exists,$(PRE_BUILD_HOOK))
 
 $(TARGET_ELF): 	$(LOCAL_OBJS) $(CORE_LIB) $(OTHER_OBJS)
-		$(CC) $(LDFLAGS) -o $@ $(LOCAL_OBJS) $(CORE_LIB) $(OTHER_OBJS) -lc -lm $(LINKER_SCRIPTS)
+		@$(ECHO) "=== ELF $@\n"
+		$(call COMPUTE_COMBINE_RECIPE,$(dir $@),$^,$(notdir $(CORE_LIB)))
 
 $(CORE_LIB):	$(CORE_OBJS) $(LIB_OBJS) $(PLATFORM_LIB_OBJS) $(USER_LIB_OBJS)
-		$(AR) rcs $@ $(CORE_OBJS) $(LIB_OBJS) $(PLATFORM_LIB_OBJS) $(USER_LIB_OBJS)
+		@$(ECHO) "=== AR $@\n"
+		$(foreach obj,$^,$(call COMPUTE_AR_RECIPE,$(dir $@),$(obj),$(notdir $(CORE_LIB)))${\n})
 
 error_on_caterina:
 		$(ERROR_ON_CATERINA)
@@ -1496,6 +1574,27 @@ size:	$(TARGET_HEX)
 
 show_boards:
 		@$(CAT) $(BOARDS_TXT) | grep -E '^[a-zA-Z0-9_]+.name' | sort -uf | sed 's/.name=/:/' | column -s: -t
+
+
+################################################
+
+show_platform:
+#		@echo "$(PARSE_PLATFORM_KEYWORDS)"
+		@echo
+#		@echo "$(PARSE_PLATFORM_AUX2)"
+#		$(info $(PARSE_PLATFORM))
+		python $(ARDMK_DIR)/bin/platform.py
+		@echo
+		@echo
+		@echo "$(PLATFORM_FILE)"
+		@echo "$(call PARSE_PLATFORM,compiler.path)"
+		
+test:
+		@echo
+		@echo
+		@echo $(RECIPE_C_PATTERN)
+		@echo
+		@echo $(call COMPUTE_OBJ_RECIPE, $(RECIPE_C_PATTERN), "-Isomeinclude_dir", "test.c", "test.o")
 
 monitor:
 ifeq ($(MONITOR_CMD), 'putty')
